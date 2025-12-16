@@ -1096,8 +1096,9 @@ struct task_struct {
 	struct nameidata		*nameidata;
 
 #ifdef CONFIG_SYSVIPC
-	struct sysv_sem			sysvsem;
-	struct sysv_shm			sysvshm;
+	/* LXC: Moved to ANDROID_KABI slots to preserve ABI */
+	/* struct sysv_sem sysvsem; -> ANDROID_KABI_USE(6) */
+	/* struct sysv_shm sysvshm; -> ANDROID_KABI_USE(7,8) */
 #endif
 #ifdef CONFIG_DETECT_HUNG_TASK
 	unsigned long			last_switch_count;
@@ -1551,9 +1552,17 @@ struct task_struct {
 	ANDROID_KABI_RESERVE(3);
 	ANDROID_KABI_RESERVE(4);
 	ANDROID_KABI_RESERVE(5);
+#ifdef CONFIG_SYSVIPC
+	/* LXC: Use KABI slots for SYSVIPC to preserve ABI */
+	ANDROID_KABI_USE(6, struct sysv_sem sysvsem);
+	/* sysv_shm is 16 bytes (list_head), needs 2 slots combined */
+	_ANDROID_KABI_REPLACE(_ANDROID_KABI_RESERVE(7); _ANDROID_KABI_RESERVE(8),
+		struct sysv_shm sysvshm);
+#else
 	ANDROID_KABI_RESERVE(6);
 	ANDROID_KABI_RESERVE(7);
 	ANDROID_KABI_RESERVE(8);
+#endif
 
 	/*
 	 * New fields for task_struct should be added above here, so that

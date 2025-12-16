@@ -37,8 +37,14 @@ struct user_struct {
 	struct ratelimit_state ratelimit;
 	ANDROID_OEM_DATA_ARRAY(1, 2);
 
+#ifdef CONFIG_POSIX_MQUEUE
+	/* LXC: Use KABI slot for POSIX_MQUEUE to preserve ABI */
+	ANDROID_KABI_USE(1, unsigned long mq_bytes);
+	ANDROID_KABI_RESERVE(2);
+#else
 	ANDROID_KABI_RESERVE(1);
 	ANDROID_KABI_RESERVE(2);
+#endif
 };
 
 extern int uids_sysfs_init(void);

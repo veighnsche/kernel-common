@@ -2,3 +2,11 @@
 # commonly used symbols
   module_layout
   __put_task_struct
+
+# LXC: USER_NS symbols (needed when CONFIG_USER_NS=y)
+  make_kuid
+  from_kuid
+  from_kuid_munged
+  make_kgid
+  from_kgid
+  from_kgid_munged
