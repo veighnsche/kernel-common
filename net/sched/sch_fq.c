@@ -52,6 +52,7 @@
 
 struct fq_skb_cb {
 	u64	        time_to_send;
+	u8		band;
 };
 
 static inline struct fq_skb_cb *fq_skb_cb(struct sk_buff *skb)
@@ -80,8 +81,7 @@ struct fq_flow {
 
 /* Second cache line, used in fq_dequeue() */
 	int		credit;
-	/* 32bit hole on 64bit arches */
-
+	int		band;
 	struct fq_flow *next;		/* next pointer in RR lists */
 
 	struct rb_node  rate_node;	/* anchor in q->delayed tree */
@@ -93,17 +93,24 @@ struct fq_flow_head {
 	struct fq_flow *last;
 };
 
-struct fq_sched_data {
+/* TEAM_003: New structures for multiband support */
+#define FQ_PRIO2BAND_CRUMB_SIZE ((TC_PRIO_MAX + 1) >> 2)
+
+enum new_flow {
+	NEW_FLOW,
+	OLD_FLOW
+};
+
+struct fq_perband_flows {
 	struct fq_flow_head new_flows;
-
 	struct fq_flow_head old_flows;
+	int		    credit;
+	int		    quantum; /* based on band nr : 576KB, 192KB, 64KB */
+};
 
-	struct rb_root	delayed;	/* for rate limited flows */
-	u64		time_next_delayed_flow;
-	u64		ktime_cache;	/* copy of last ktime_get_ns() */
-	unsigned long	unthrottle_latency_ns;
+struct fq_sched_data {
+/* Read mostly cache line */
 
-	struct fq_flow	internal;	/* for non classified or high prio packets */
 	u32		quantum;
 	u32		initial_quantum;
 	u32		flow_refill_delay;
@@ -117,22 +124,40 @@ struct fq_sched_data {
 	u8		rate_enable;
 	u8		fq_trees_log;
 	u8		horizon_drop;
+	u8		prio2band[FQ_PRIO2BAND_CRUMB_SIZE];
+	u32		timer_slack; /* hrtimer slack in ns */
+
+/* Read/Write fields. */
+
+	unsigned int band_nr; /* band being serviced in fq_dequeue() */
+
+	struct fq_perband_flows band_flows[FQ_BANDS];
+
+	struct fq_flow	internal;	/* fastpath queue. */
+	struct rb_root	delayed;	/* for rate limited flows */
+	u64		time_next_delayed_flow;
+	unsigned long	unthrottle_latency_ns;
+
+	u32		band_pkt_count[FQ_BANDS];
 	u32		flows;
-	u32		inactive_flows;
+	u32		inactive_flows; /* Flows with no packet to send. */
 	u32		throttled_flows;
 
-	u64		stat_gc_flows;
-	u64		stat_internal_packets;
+	u64		ktime_cache;	/* copy of last ktime_get_ns() */
 	u64		stat_throttled;
+	u64		stat_internal_packets;
+	struct qdisc_watchdog watchdog;
+	u64		stat_gc_flows;
+
+/* Seldom used fields. */
+
+	u64		stat_band_drops[FQ_BANDS];
 	u64		stat_ce_mark;
 	u64		stat_horizon_drops;
 	u64		stat_horizon_caps;
 	u64		stat_flows_plimit;
 	u64		stat_pkts_too_long;
 	u64		stat_allocation_errors;
-
-	u32		timer_slack; /* hrtimer slack in ns */
-	struct qdisc_watchdog watchdog;
 };
 
 /*
@@ -159,8 +184,21 @@ static bool fq_flow_is_throttled(const struct fq_flow *f)
 	return f->next == &throttled;
 }
 
-static void fq_flow_add_tail(struct fq_flow_head *head, struct fq_flow *flow)
+/* TEAM_003: Helper to map priority to band using compressed priomap */
+static u8 fq_prio2band(const u8 *prio2band, unsigned int prio)
 {
+	return (READ_ONCE(prio2band[prio / 4]) >> (2 * (prio & 0x3))) & 0x3;
+}
+
+/* TEAM_003: Updated to add flows to per-band lists */
+static void fq_flow_add_tail(struct fq_sched_data *q, struct fq_flow *flow,
+			     enum new_flow list_sel)
+{
+	struct fq_perband_flows *pband = &q->band_flows[flow->band];
+	struct fq_flow_head *head = (list_sel == NEW_FLOW) ?
+					&pband->new_flows :
+					&pband->old_flows;
+
 	if (head->first)
 		head->last->next = flow;
 	else
@@ -173,7 +211,7 @@ static void fq_flow_unset_throttled(struct fq_sched_data *q, struct fq_flow *f)
 {
 	rb_erase(&f->rate_node, &q->delayed);
 	q->throttled_flows--;
-	fq_flow_add_tail(&q->old_flows, f);
+	fq_flow_add_tail(q, f, OLD_FLOW);
 }
 
 static void fq_flow_set_throttled(struct fq_sched_data *q, struct fq_flow *f)
@@ -328,6 +366,8 @@ static struct fq_flow *fq_classify(struct sk_buff *skb, struct fq_sched_data *q)
 					fq_flow_unset_throttled(q, f);
 				f->time_next_packet = 0ULL;
 			}
+			/* TEAM_003: Update band for existing flow */
+			f->band = fq_prio2band(q->prio2band, skb->priority & TC_PRIO_MAX);
 			return f;
 		}
 		if (f->sk > sk)
@@ -353,6 +393,10 @@ static struct fq_flow *fq_classify(struct sk_buff *skb, struct fq_sched_data *q)
 	}
 	f->credit = q->initial_quantum;
 
+	/* TEAM_003: Assign band based on priority */
+	f->band = fq_prio2band(q->prio2band, skb->priority & TC_PRIO_MAX);
+
+	/* f->t_root is already zeroed after kmem_cache_zalloc() */
 	rb_link_node(&f->fq_node, parent, p);
 	rb_insert_color(&f->fq_node, root);
 
@@ -473,13 +517,17 @@ static int fq_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 	f = fq_classify(skb, q);
 	if (unlikely(f->qlen >= q->flow_plimit && f != &q->internal)) {
 		q->stat_flows_plimit++;
+		q->stat_band_drops[f->band]++;
 		return qdisc_drop(skb, sch, to_free);
 	}
+
+	/* TEAM_003: Store band in skb control block */
+	fq_skb_cb(skb)->band = f->band;
 
 	f->qlen++;
 	qdisc_qstats_backlog_inc(sch, skb);
 	if (fq_flow_is_detached(f)) {
-		fq_flow_add_tail(&q->new_flows, f);
+		fq_flow_add_tail(q, f, NEW_FLOW);
 		if (time_after(jiffies, f->age + q->flow_refill_delay))
 			f->credit = max_t(u32, f->credit, q->quantum);
 		q->inactive_flows--;
@@ -545,23 +593,37 @@ static struct sk_buff *fq_dequeue(struct Qdisc *sch)
 	q->ktime_cache = now = ktime_get_ns();
 	fq_check_throttled(q, now);
 begin:
-	head = &q->new_flows;
-	if (!head->first) {
-		head = &q->old_flows;
+	/* TEAM_003: Weighted round-robin across bands */
+	for (;;) {
+		struct fq_perband_flows *pband = &q->band_flows[q->band_nr];
+		
+		head = &pband->new_flows;
 		if (!head->first) {
-			if (q->time_next_delayed_flow != ~0ULL)
-				qdisc_watchdog_schedule_range_ns(&q->watchdog,
-							q->time_next_delayed_flow,
-							q->timer_slack);
-			return NULL;
+			head = &pband->old_flows;
+			if (!head->first) {
+				/* Move to next band */
+				if (++q->band_nr >= FQ_BANDS)
+					q->band_nr = 0;
+				if (q->band_nr == 0) {
+					/* Full cycle completed */
+					if (q->time_next_delayed_flow != ~0ULL)
+						qdisc_watchdog_schedule_range_ns(&q->watchdog,
+									q->time_next_delayed_flow,
+									q->timer_slack);
+					return NULL;
+				}
+				continue;
+			}
 		}
+		f = head->first;
+		break;
 	}
-	f = head->first;
 
 	if (f->credit <= 0) {
-		f->credit += q->quantum;
+		struct fq_perband_flows *pband = &q->band_flows[f->band];
+		f->credit += pband->quantum;
 		head->first = f->next;
-		fq_flow_add_tail(&q->old_flows, f);
+		fq_flow_add_tail(q, f, OLD_FLOW);
 		goto begin;
 	}
 
@@ -583,10 +645,11 @@ begin:
 		}
 		fq_dequeue_skb(sch, f, skb);
 	} else {
+		struct fq_perband_flows *pband = &q->band_flows[f->band];
 		head->first = f->next;
 		/* force a pass through old_flows to prevent starvation */
-		if ((head == &q->new_flows) && q->old_flows.first) {
-			fq_flow_add_tail(&q->old_flows, f);
+		if ((head == &pband->new_flows) && pband->old_flows.first) {
+			fq_flow_add_tail(q, f, OLD_FLOW);
 		} else {
 			fq_flow_set_detached(f);
 			q->inactive_flows++;
@@ -595,6 +658,9 @@ begin:
 	}
 	plen = qdisc_pkt_len(skb);
 	f->credit -= plen;
+	
+	/* TEAM_003: Update band packet count */
+	q->band_pkt_count[f->band]++;
 
 	if (!q->rate_enable)
 		goto out;
@@ -686,12 +752,16 @@ static void fq_reset(struct Qdisc *sch)
 			kmem_cache_free(fq_flow_cachep, f);
 		}
 	}
-	q->new_flows.first	= NULL;
-	q->old_flows.first	= NULL;
+	/* TEAM_003: Clear per-band flow lists */
+	for (idx = 0; idx < FQ_BANDS; idx++) {
+		q->band_flows[idx].new_flows.first = NULL;
+		q->band_flows[idx].old_flows.first = NULL;
+	}
 	q->delayed		= RB_ROOT;
 	q->flows		= 0;
 	q->inactive_flows	= 0;
 	q->throttled_flows	= 0;
+	q->band_nr		= 0;
 }
 
 static void fq_rehash(struct fq_sched_data *q,
@@ -801,6 +871,8 @@ static const struct nla_policy fq_policy[TCA_FQ_MAX + 1] = {
 	[TCA_FQ_TIMER_SLACK]		= { .type = NLA_U32 },
 	[TCA_FQ_HORIZON]		= { .type = NLA_U32 },
 	[TCA_FQ_HORIZON_DROP]		= { .type = NLA_U8 },
+	[TCA_FQ_PRIOMAP]		= NLA_POLICY_EXACT_LEN(sizeof(struct tc_prio_qopt)),
+	[TCA_FQ_WEIGHTS]		= NLA_POLICY_EXACT_LEN(sizeof(s32[FQ_BANDS])),
 };
 
 static int fq_change(struct Qdisc *sch, struct nlattr *opt,
@@ -894,6 +966,41 @@ static int fq_change(struct Qdisc *sch, struct nlattr *opt,
 	if (tb[TCA_FQ_HORIZON_DROP])
 		q->horizon_drop = nla_get_u8(tb[TCA_FQ_HORIZON_DROP]);
 
+	/* TEAM_003: Handle multiband configuration */
+	if (tb[TCA_FQ_PRIOMAP]) {
+		struct tc_prio_qopt *prio = nla_data(tb[TCA_FQ_PRIOMAP]);
+		int i;
+		
+		/* Clear priomap first */
+		memset(q->prio2band, 0, sizeof(q->prio2band));
+		
+		/* Compress the priomap to save space */
+		for (i = 0; i < TC_PRIO_MAX + 1; i++) {
+			u8 band = prio->priomap[i];
+			if (band >= FQ_BANDS) {
+				NL_SET_ERR_MSG_MOD(extack, "invalid band in priomap");
+				err = -EINVAL;
+				goto out;
+			}
+			/* Store 2 bits per priority */
+			q->prio2band[i / 4] |= (band << (2 * (i & 0x3)));
+		}
+	}
+	
+	if (tb[TCA_FQ_WEIGHTS]) {
+		s32 *weights = nla_data(tb[TCA_FQ_WEIGHTS]);
+		int i;
+		
+		for (i = 0; i < FQ_BANDS; i++) {
+			if (weights[i] < FQ_MIN_WEIGHT) {
+				NL_SET_ERR_MSG_MOD(extack, "weight too small");
+				err = -EINVAL;
+				goto out;
+			}
+			q->band_flows[i].quantum = weights[i];
+		}
+	}
+
 	if (!err) {
 
 		sch_tree_unlock(sch);
@@ -911,6 +1018,7 @@ static int fq_change(struct Qdisc *sch, struct nlattr *opt,
 	}
 	qdisc_tree_reduce_backlog(sch, drop_count, drop_len);
 
+out:
 	sch_tree_unlock(sch);
 	return err;
 }
@@ -938,8 +1046,6 @@ static int fq_init(struct Qdisc *sch, struct nlattr *opt,
 	q->flow_max_rate	= ~0UL;
 	q->time_next_delayed_flow = ~0ULL;
 	q->rate_enable		= 1;
-	q->new_flows.first	= NULL;
-	q->old_flows.first	= NULL;
 	q->delayed		= RB_ROOT;
 	q->fq_root		= NULL;
 	q->fq_trees_log		= ilog2(1024);
@@ -953,6 +1059,22 @@ static int fq_init(struct Qdisc *sch, struct nlattr *opt,
 
 	/* Default ce_threshold of 4294 seconds */
 	q->ce_threshold		= (u64)NSEC_PER_USEC * ~0U;
+
+	/* TEAM_003: Initialize multiband defaults */
+	{
+		int i;
+		memset(q->prio2band, 0, sizeof(q->prio2band));
+		for (i = 0; i < TC_PRIO_MAX + 1; i++) {
+			u8 band = sch_default_prio2band[i];
+			q->prio2band[i / 4] |= (band << (2 * (i & 0x3)));
+		}
+	}
+	q->band_nr = 0;
+	
+	/* Initialize per-band quanta: 576KB, 192KB, 64KB */
+	q->band_flows[0].quantum = 9 << 16; /* 576KB */
+	q->band_flows[1].quantum = 3 << 16; /* 192KB */
+	q->band_flows[2].quantum = 1 << 16; /* 64KB */
 
 	qdisc_watchdog_init_clockid(&q->watchdog, sch, CLOCK_MONOTONIC);
 
@@ -999,6 +1121,30 @@ static int fq_dump(struct Qdisc *sch, struct sk_buff *skb)
 	    nla_put_u8(skb, TCA_FQ_HORIZON_DROP, q->horizon_drop))
 		goto nla_put_failure;
 
+	/* TEAM_003: Dump multiband configuration */
+	{
+		s32 weights[FQ_BANDS];
+		int i;
+		
+		for (i = 0; i < FQ_BANDS; i++)
+			weights[i] = q->band_flows[i].quantum;
+			
+		if (nla_put(skb, TCA_FQ_WEIGHTS, sizeof(weights), weights))
+			goto nla_put_failure;
+	}
+	
+	/* TEAM_008: Export priomap for visibility */
+	{
+		struct tc_prio_qopt prio = { .bands = FQ_BANDS };
+		int i;
+		
+		for (i = 0; i < TC_PRIO_MAX + 1; i++)
+			prio.priomap[i] = fq_prio2band(q->prio2band, i);
+		
+		if (nla_put(skb, TCA_FQ_PRIOMAP, sizeof(prio), &prio))
+			goto nla_put_failure;
+	}
+
 	return nla_nest_end(skb, opts);
 
 nla_put_failure:
@@ -1029,6 +1175,12 @@ static int fq_dump_stats(struct Qdisc *sch, struct gnet_dump *d)
 	st.ce_mark		  = q->stat_ce_mark;
 	st.horizon_drops	  = q->stat_horizon_drops;
 	st.horizon_caps		  = q->stat_horizon_caps;
+	
+	/* TEAM_003: Copy per-band statistics */
+	memcpy(st.band_drops, q->stat_band_drops, sizeof(st.band_drops));
+	memcpy(st.band_pkt_count, q->band_pkt_count, sizeof(st.band_pkt_count));
+	st.pad = 0;
+	
 	sch_tree_unlock(sch);
 
 	return gnet_stats_copy_app(d, &st, sizeof(st));

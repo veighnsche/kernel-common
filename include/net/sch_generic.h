@@ -1311,4 +1311,6 @@ static inline void qdisc_synchronize(const struct Qdisc *q)
 		msleep(1);
 }
 
+extern const u8 sch_default_prio2band[TC_PRIO_MAX + 1];
+
 #endif
