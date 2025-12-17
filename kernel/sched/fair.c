@@ -176,7 +176,8 @@ static void update_burst_score(struct sched_entity *se) {
 	u8 prio = p->static_prio - MAX_RT_PRIO;
 	u8 prev_prio = min(39, prio + se->burst_score);
 
-	se->burst_score = se->burst_penalty >> 2;
+	/* TEAM_036: Add explicit bounds check for burst_score (array has 40 elements) */
+	se->burst_score = min_t(u8, se->burst_penalty >> 2, 39);
 
 	u8 new_prio = min(39, prio + se->burst_score);
 	if (new_prio != prev_prio)
