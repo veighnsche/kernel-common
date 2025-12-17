@@ -3246,6 +3246,9 @@ DEFINE_STATIC_KEY_ARRAY_FALSE(lru_gen_caps, NR_LRU_GEN_CAPS);
 #endif
 EXPORT_SYMBOL_GPL(lru_gen_caps);
 
+/* TEAM_022: Forward declaration - function defined later but called in lru_gen_age_node */
+static void set_initial_priority(struct pglist_data *pgdat, struct scan_control *sc);
+
 /******************************************************************************
  *                          shorthand helpers
  ******************************************************************************/
