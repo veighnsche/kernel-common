@@ -699,6 +699,8 @@ static void wake_oom_reaper(struct timer_list *timer)
 #define OOM_REAPER_DELAY (2*HZ)
 static void queue_oom_reaper(struct task_struct *tsk)
 {
+	bool bypass = false;
+
 	/* mm is already queued? */
 	if (test_and_set_bit(MMF_OOM_REAP_QUEUED, &tsk->signal->oom_mm->flags))
 		return;
@@ -706,6 +708,10 @@ static void queue_oom_reaper(struct task_struct *tsk)
 	get_task_struct(tsk);
 	timer_setup(&tsk->oom_reaper_timer, wake_oom_reaper, 0);
 	tsk->oom_reaper_timer.expires = jiffies + OOM_REAPER_DELAY;
+	/* TEAM_021: Add vendor hook to bypass OOM reaper delay */
+	trace_android_vh_oom_reaper_delay_bypass(tsk, &bypass);
+	if (bypass)
+		tsk->oom_reaper_timer.expires = jiffies;
 	add_timer(&tsk->oom_reaper_timer);
 }
 
@@ -794,6 +800,7 @@ static void mark_oom_victim(struct task_struct *tsk)
 	 * any memory and livelock. freezing_slow_path will tell the freezer
 	 * that TIF_MEMDIE tasks should be ignored.
 	 */
+	/* TEAM_021: Keep __thaw_task() - thaw_process() doesn't exist in 6.1 */
 	__thaw_task(tsk);
 	atomic_inc(&oom_victims);
 	cred = get_task_cred(tsk);
@@ -808,6 +815,8 @@ void exit_oom_victim(void)
 {
 	clear_thread_flag(TIF_MEMDIE);
 
+	/* TEAM_021: Add vendor hook for exit_oom_victim */
+	trace_android_vh_exit_oom_victim(current);
 	if (!atomic_dec_return(&oom_victims))
 		wake_up_all(&oom_victims_wait);
 }
@@ -1285,12 +1294,18 @@ put_task:
 
 void add_to_oom_reaper(struct task_struct *p)
 {
+	bool thaw = false;
+
 	p = find_lock_task_mm(p);
 	if (!p)
 		return;
 
 	if (task_will_free_mem(p)) {
 		__mark_oom_victim(p);
+		/* TEAM_021: Add vendor hook for thawing killed process */
+		trace_android_vh_thaw_killed_process(&thaw);
+		if (thaw)
+			__thaw_task(p);
 		queue_oom_reaper(p);
 	}
 	task_unlock(p);
