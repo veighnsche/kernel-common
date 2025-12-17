@@ -73,7 +73,7 @@ struct tls_rec {
 	struct sock *sk;
 
 	char aad_space[TLS_AAD_SPACE_SIZE];
-	u8 iv_data[MAX_IV_SIZE];
+	u8 iv_data[TLS_MAX_IV_SIZE];
 	struct aead_request aead_req;
 	u8 aead_req_ctx[];
 };
@@ -136,6 +136,7 @@ void tls_strp_dev_exit(void);
 
 void tls_strp_done(struct tls_strparser *strp);
 void tls_strp_stop(struct tls_strparser *strp);
+void tls_strp_abort_strp(struct tls_strparser *strp, int err);
 int tls_strp_init(struct tls_strparser *strp, struct sock *sk);
 void tls_strp_data_ready(struct tls_strparser *strp);
 
@@ -165,7 +166,7 @@ static inline struct sk_buff *tls_strp_msg(struct tls_sw_context_rx *ctx)
 
 static inline bool tls_strp_msg_ready(struct tls_sw_context_rx *ctx)
 {
-	return ctx->strp.msg_ready;
+	return READ_ONCE(ctx->strp.msg_ready);
 }
 
 static inline bool tls_strp_msg_mixed_decrypted(struct tls_sw_context_rx *ctx)

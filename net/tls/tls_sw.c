@@ -60,7 +60,7 @@ struct tls_decrypt_arg {
 
 struct tls_decrypt_ctx {
 	struct sock *sk;
-	u8 iv[MAX_IV_SIZE];
+	u8 iv[TLS_MAX_IV_SIZE];
 	u8 aad[TLS_MAX_AAD_SIZE];
 	u8 tail;
 	bool free_sgout;
@@ -2349,7 +2349,7 @@ int tls_rx_msg_size(struct tls_strparser *strp, struct sk_buff *skb)
 {
 	struct tls_context *tls_ctx = tls_get_ctx(strp->sk);
 	struct tls_prot_info *prot = &tls_ctx->prot_info;
-	char header[TLS_HEADER_SIZE + MAX_IV_SIZE];
+	char header[TLS_HEADER_SIZE + TLS_MAX_IV_SIZE];
 	size_t cipher_overhead;
 	size_t data_len = 0;
 	int ret;
@@ -2489,7 +2489,7 @@ void tls_sw_release_resources_rx(struct sock *sk)
 	struct tls_sw_context_rx *ctx = tls_sw_ctx_rx(tls_ctx);
 
 	kfree(tls_ctx->rx.rec_seq);
-	kfree(tls_ctx->rx.iv);
+	/* iv is now inline, no need to free */
 
 	if (ctx->aead_recv) {
 		__skb_queue_purge(&ctx->rx_list);
@@ -2836,7 +2836,7 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 	}
 
 	/* Sanity-check the sizes for stack allocations. */
-	if (iv_size > MAX_IV_SIZE || nonce_size > MAX_IV_SIZE ||
+	if (iv_size > TLS_MAX_IV_SIZE || nonce_size > TLS_MAX_IV_SIZE ||
 	    rec_seq_size > TLS_MAX_REC_SEQ_SIZE || tag_size != TLS_TAG_SIZE ||
 	    prot->aad_size > TLS_MAX_AAD_SIZE) {
 		rc = -EINVAL;
@@ -2851,27 +2851,19 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 			      prot->tag_size + prot->tail_size;
 	prot->iv_size = iv_size;
 	prot->salt_size = salt_size;
-	cctx->iv = kmalloc(iv_size + salt_size, GFP_KERNEL);
-	if (!cctx->iv) {
-		rc = -ENOMEM;
-		goto free_priv;
-	}
+	/* Use inline array instead of kmalloc */
 	/* Note: 128 & 256 bit salt are the same size */
 	prot->rec_seq_size = rec_seq_size;
 	memcpy(cctx->iv, salt, salt_size);
 	memcpy(cctx->iv + salt_size, iv, iv_size);
-	cctx->rec_seq = kmemdup(rec_seq, rec_seq_size, GFP_KERNEL);
-	if (!cctx->rec_seq) {
-		rc = -ENOMEM;
-		goto free_iv;
-	}
+	memcpy(cctx->rec_seq, rec_seq, rec_seq_size);
 
 	if (!*aead) {
 		*aead = crypto_alloc_aead(cipher_name, 0, 0);
 		if (IS_ERR(*aead)) {
 			rc = PTR_ERR(*aead);
 			*aead = NULL;
-			goto free_rec_seq;
+			goto free_priv;
 		}
 	}
 
@@ -2904,12 +2896,6 @@ int tls_set_sw_offload(struct sock *sk, struct tls_context *ctx, int tx)
 free_aead:
 	crypto_free_aead(*aead);
 	*aead = NULL;
-free_rec_seq:
-	kfree(cctx->rec_seq);
-	cctx->rec_seq = NULL;
-free_iv:
-	kfree(cctx->iv);
-	cctx->iv = NULL;
 free_priv:
 	if (tx) {
 		kfree(ctx->priv_ctx_tx);

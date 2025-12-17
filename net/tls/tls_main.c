@@ -75,6 +75,132 @@ const struct tls_cipher_size_desc tls_cipher_size_desc[] = {
 	CIPHER_SIZE_DESC(TLS_CIPHER_SM4_CCM),
 };
 
+/* Cipher descriptor table for unified cipher handling */
+static const struct tls_cipher_desc tls_cipher_desc_table[] = {
+	[TLS_CIPHER_AES_GCM_128] = {
+		.nonce = TLS_CIPHER_AES_GCM_128_IV_SIZE,
+		.iv = TLS_CIPHER_AES_GCM_128_IV_SIZE,
+		.key = TLS_CIPHER_AES_GCM_128_KEY_SIZE,
+		.salt = TLS_CIPHER_AES_GCM_128_SALT_SIZE,
+		.tag = TLS_CIPHER_AES_GCM_128_TAG_SIZE,
+		.rec_seq = TLS_CIPHER_AES_GCM_128_REC_SEQ_SIZE,
+		.iv_offset = offsetof(struct tls12_crypto_info_aes_gcm_128, iv),
+		.key_offset = offsetof(struct tls12_crypto_info_aes_gcm_128, key),
+		.salt_offset = offsetof(struct tls12_crypto_info_aes_gcm_128, salt),
+		.rec_seq_offset = offsetof(struct tls12_crypto_info_aes_gcm_128, rec_seq),
+		.cipher_name = "aes_gcm",
+		.offloadable = true,
+		.crypto_info = sizeof(struct tls12_crypto_info_aes_gcm_128),
+	},
+	[TLS_CIPHER_AES_GCM_256] = {
+		.nonce = TLS_CIPHER_AES_GCM_256_IV_SIZE,
+		.iv = TLS_CIPHER_AES_GCM_256_IV_SIZE,
+		.key = TLS_CIPHER_AES_GCM_256_KEY_SIZE,
+		.salt = TLS_CIPHER_AES_GCM_256_SALT_SIZE,
+		.tag = TLS_CIPHER_AES_GCM_256_TAG_SIZE,
+		.rec_seq = TLS_CIPHER_AES_GCM_256_REC_SEQ_SIZE,
+		.iv_offset = offsetof(struct tls12_crypto_info_aes_gcm_256, iv),
+		.key_offset = offsetof(struct tls12_crypto_info_aes_gcm_256, key),
+		.salt_offset = offsetof(struct tls12_crypto_info_aes_gcm_256, salt),
+		.rec_seq_offset = offsetof(struct tls12_crypto_info_aes_gcm_256, rec_seq),
+		.cipher_name = "aes_gcm",
+		.offloadable = true,
+		.crypto_info = sizeof(struct tls12_crypto_info_aes_gcm_256),
+	},
+	[TLS_CIPHER_AES_CCM_128] = {
+		.nonce = TLS_CIPHER_AES_CCM_128_IV_SIZE,
+		.iv = TLS_CIPHER_AES_CCM_128_IV_SIZE,
+		.key = TLS_CIPHER_AES_CCM_128_KEY_SIZE,
+		.salt = TLS_CIPHER_AES_CCM_128_SALT_SIZE,
+		.tag = TLS_CIPHER_AES_CCM_128_TAG_SIZE,
+		.rec_seq = TLS_CIPHER_AES_CCM_128_REC_SEQ_SIZE,
+		.iv_offset = offsetof(struct tls12_crypto_info_aes_ccm_128, iv),
+		.key_offset = offsetof(struct tls12_crypto_info_aes_ccm_128, key),
+		.salt_offset = offsetof(struct tls12_crypto_info_aes_ccm_128, salt),
+		.rec_seq_offset = offsetof(struct tls12_crypto_info_aes_ccm_128, rec_seq),
+		.cipher_name = "aes_ccm",
+		.offloadable = true,
+		.crypto_info = sizeof(struct tls12_crypto_info_aes_ccm_128),
+	},
+	[TLS_CIPHER_CHACHA20_POLY1305] = {
+		.nonce = TLS_CIPHER_CHACHA20_POLY1305_IV_SIZE,
+		.iv = TLS_CIPHER_CHACHA20_POLY1305_IV_SIZE,
+		.key = TLS_CIPHER_CHACHA20_POLY1305_KEY_SIZE,
+		.salt = TLS_CIPHER_CHACHA20_POLY1305_SALT_SIZE,
+		.tag = TLS_CIPHER_CHACHA20_POLY1305_TAG_SIZE,
+		.rec_seq = TLS_CIPHER_CHACHA20_POLY1305_REC_SEQ_SIZE,
+		.iv_offset = offsetof(struct tls12_crypto_info_chacha20_poly1305, iv),
+		.key_offset = offsetof(struct tls12_crypto_info_chacha20_poly1305, key),
+		.salt_offset = offsetof(struct tls12_crypto_info_chacha20_poly1305, salt),
+		.rec_seq_offset = offsetof(struct tls12_crypto_info_chacha20_poly1305, rec_seq),
+		.cipher_name = "chacha20_poly1305",
+		.offloadable = true,
+		.crypto_info = sizeof(struct tls12_crypto_info_chacha20_poly1305),
+	},
+	[TLS_CIPHER_SM4_GCM] = {
+		.nonce = TLS_CIPHER_SM4_GCM_IV_SIZE,
+		.iv = TLS_CIPHER_SM4_GCM_IV_SIZE,
+		.key = TLS_CIPHER_SM4_GCM_KEY_SIZE,
+		.salt = TLS_CIPHER_SM4_GCM_SALT_SIZE,
+		.tag = TLS_CIPHER_SM4_GCM_TAG_SIZE,
+		.rec_seq = TLS_CIPHER_SM4_GCM_REC_SEQ_SIZE,
+		.iv_offset = offsetof(struct tls12_crypto_info_sm4_gcm, iv),
+		.key_offset = offsetof(struct tls12_crypto_info_sm4_gcm, key),
+		.salt_offset = offsetof(struct tls12_crypto_info_sm4_gcm, salt),
+		.rec_seq_offset = offsetof(struct tls12_crypto_info_sm4_gcm, rec_seq),
+		.cipher_name = "sm4_gcm",
+		.offloadable = true,
+		.crypto_info = sizeof(struct tls12_crypto_info_sm4_gcm),
+	},
+	[TLS_CIPHER_SM4_CCM] = {
+		.nonce = TLS_CIPHER_SM4_CCM_IV_SIZE,
+		.iv = TLS_CIPHER_SM4_CCM_IV_SIZE,
+		.key = TLS_CIPHER_SM4_CCM_KEY_SIZE,
+		.salt = TLS_CIPHER_SM4_CCM_SALT_SIZE,
+		.tag = TLS_CIPHER_SM4_CCM_TAG_SIZE,
+		.rec_seq = TLS_CIPHER_SM4_CCM_REC_SEQ_SIZE,
+		.iv_offset = offsetof(struct tls12_crypto_info_sm4_ccm, iv),
+		.key_offset = offsetof(struct tls12_crypto_info_sm4_ccm, key),
+		.salt_offset = offsetof(struct tls12_crypto_info_sm4_ccm, salt),
+		.rec_seq_offset = offsetof(struct tls12_crypto_info_sm4_ccm, rec_seq),
+		.cipher_name = "sm4_ccm",
+		.offloadable = true,
+		.crypto_info = sizeof(struct tls12_crypto_info_sm4_ccm),
+	},
+};
+
+/* Accessor function implementations */
+static inline const struct tls_cipher_desc *get_cipher_desc(u16 cipher_type)
+{
+	if (cipher_type >= ARRAY_SIZE(tls_cipher_desc_table))
+		return NULL;
+	return &tls_cipher_desc_table[cipher_type];
+}
+
+static inline char *crypto_info_iv(struct tls_crypto_info *crypto_info,
+				   const struct tls_cipher_desc *cipher_desc)
+{
+	return (char *)crypto_info + cipher_desc->iv_offset;
+}
+
+static inline char *crypto_info_key(struct tls_crypto_info *crypto_info,
+				    const struct tls_cipher_desc *cipher_desc)
+{
+	return (char *)crypto_info + cipher_desc->key_offset;
+}
+
+static inline char *crypto_info_salt(struct tls_crypto_info *crypto_info,
+				     const struct tls_cipher_desc *cipher_desc)
+{
+	return (char *)crypto_info + cipher_desc->salt_offset;
+}
+
+static inline char *crypto_info_rec_seq(struct tls_crypto_info *crypto_info,
+					const struct tls_cipher_desc *cipher_desc)
+{
+	return (char *)crypto_info + cipher_desc->rec_seq_offset;
+}
+
 static const struct proto *saved_tcpv6_prot;
 static DEFINE_MUTEX(tcpv6_prot_mutex);
 static const struct proto *saved_tcpv4_prot;
@@ -101,6 +227,8 @@ int wait_on_pending_writer(struct sock *sk, long *timeo)
 
 	add_wait_queue(sk_sleep(sk), &wait);
 	while (1) {
+		int ret;
+
 		if (!*timeo) {
 			rc = -EAGAIN;
 			break;
@@ -111,9 +239,13 @@ int wait_on_pending_writer(struct sock *sk, long *timeo)
 			break;
 		}
 
-		if (sk_wait_event(sk, timeo,
-				  !READ_ONCE(sk->sk_write_pending), &wait))
+		ret = sk_wait_event(sk, timeo,
+				  !READ_ONCE(sk->sk_write_pending), &wait);
+		if (ret) {
+			if (ret < 0)
+				rc = ret;
 			break;
+		}
 	}
 	remove_wait_queue(sk_sleep(sk), &wait);
 	return rc;
@@ -298,8 +430,7 @@ static void tls_sk_proto_cleanup(struct sock *sk,
 
 	/* We need these for tls_sw_fallback handling of other packets */
 	if (ctx->tx_conf == TLS_SW) {
-		kfree(ctx->tx.rec_seq);
-		kfree(ctx->tx.iv);
+		/* iv and rec_seq are now inline, no need to free */
 		tls_sw_release_resources_tx(sk);
 		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRTXSW);
 	} else if (ctx->tx_conf == TLS_HW) {
@@ -314,6 +445,11 @@ static void tls_sk_proto_cleanup(struct sock *sk,
 		tls_device_offload_cleanup_rx(sk);
 		TLS_DEC_STATS(sock_net(sk), LINUX_MIB_TLSCURRRXDEVICE);
 	}
+}
+
+static int tls_disconnect(struct sock *sk, int flags)
+{
+	return -EOPNOTSUPP;
 }
 
 static void tls_sk_proto_close(struct sock *sk, long timeout)
@@ -991,6 +1127,7 @@ static void build_protos(struct proto prot[TLS_NUM_CONFIG][TLS_NUM_CONFIG],
 	prot[TLS_BASE][TLS_BASE].setsockopt	= tls_setsockopt;
 	prot[TLS_BASE][TLS_BASE].getsockopt	= tls_getsockopt;
 	prot[TLS_BASE][TLS_BASE].close		= tls_sk_proto_close;
+	prot[TLS_BASE][TLS_BASE].disconnect	= tls_disconnect;
 
 	prot[TLS_SW][TLS_BASE] = prot[TLS_BASE][TLS_BASE];
 	prot[TLS_SW][TLS_BASE].sendmsg		= tls_sw_sendmsg;

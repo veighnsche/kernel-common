@@ -74,8 +74,8 @@ extern const struct tls_cipher_size_desc tls_cipher_size_desc[];
 
 #define TLS_AAD_SPACE_SIZE		13
 
-#define MAX_IV_SIZE			16
-#define TLS_TAG_SIZE			16
+#define TLS_MAX_IV_SIZE			16
+#define TLS_MAX_SALT_SIZE		4
 #define TLS_MAX_REC_SEQ_SIZE		8
 #define TLS_MAX_AAD_SIZE		TLS_AAD_SPACE_SIZE
 
@@ -205,8 +205,8 @@ enum tls_context_flags {
 };
 
 struct cipher_context {
-	char *iv;
-	char *rec_seq;
+	char iv[TLS_MAX_IV_SIZE + TLS_MAX_SALT_SIZE];
+	char rec_seq[TLS_MAX_REC_SEQ_SIZE];
 };
 
 union tls_crypto_context {
