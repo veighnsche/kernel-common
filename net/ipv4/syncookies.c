@@ -76,6 +76,8 @@ u64 cookie_init_timestamp(struct request_sock *req, u64 now)
 	if (ts > ts_now)
 		ts -= (1UL << TSBITS);
 
+	if (tcp_rsk(req)->req_usec_ts)
+		return ts * NSEC_PER_USEC;
 	return ts * (NSEC_PER_SEC / TCP_TS_HZ);
 }
 

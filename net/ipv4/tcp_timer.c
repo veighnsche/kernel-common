@@ -32,7 +32,9 @@ static u32 tcp_clamp_rto_to_user_timeout(const struct sock *sk)
 	start_ts = tcp_sk(sk)->retrans_stamp;
 	if (!icsk->icsk_user_timeout)
 		return icsk->icsk_rto;
-	elapsed = tcp_time_stamp(tcp_sk(sk)) - start_ts;
+	elapsed = tcp_time_stamp_ts(tcp_sk(sk)) - start_ts;
+	if (tcp_sk(sk)->tcp_usec_ts)
+		elapsed /= USEC_PER_MSEC;
 	remaining = icsk->icsk_user_timeout - elapsed;
 	if (remaining <= 0)
 		return 1; /* user timeout has passed; fire ASAP */

@@ -683,6 +683,24 @@ new_measure:
 	tp->rcv_rtt_est.time = tp->tcp_mstamp;
 }
 
+/* NEW FUNCTION: Calculate RTT from timestamp option */
+static s32 tcp_rtt_tsopt_us(const struct tcp_sock *tp, u32 min_delta)
+{
+	u32 delta, delta_us;
+
+	delta = tcp_time_stamp_ts(tp) - tp->rx_opt.rcv_tsecr;
+	if (tp->tcp_usec_ts)
+		return delta;  // Already in usec
+
+	if (likely(delta < INT_MAX / (USEC_PER_SEC / TCP_TS_HZ))) {
+		if (!delta)
+			delta = min_delta;
+		delta_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
+		return delta_us;
+	}
+	return -1;
+}
+
 static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 					  const struct sk_buff *skb)
 {
@@ -694,15 +712,9 @@ static inline void tcp_rcv_rtt_measure_ts(struct sock *sk,
 
 	if (TCP_SKB_CB(skb)->end_seq -
 	    TCP_SKB_CB(skb)->seq >= inet_csk(sk)->icsk_ack.rcv_mss) {
-		u32 delta = tcp_time_stamp(tp) - tp->rx_opt.rcv_tsecr;
-		u32 delta_us;
-
-		if (likely(delta < INT_MAX / (USEC_PER_SEC / TCP_TS_HZ))) {
-			if (!delta)
-				delta = 1;
-			delta_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
-			tcp_rcv_rtt_update(tp, delta_us, 0);
-		}
+		s32 delta = tcp_rtt_tsopt_us(tp, 0);  // Uses new helper
+		if (delta >= 0)
+			tcp_rcv_rtt_update(tp, delta, 0);
 	}
 }
 
@@ -3170,17 +3182,9 @@ static bool tcp_ack_update_rtt(struct sock *sk, const int flag,
 	 * left edge of the send window.
 	 * See draft-ietf-tcplw-high-performance-00, section 3.3.
 	 */
-	if (seq_rtt_us < 0 && tp->rx_opt.saw_tstamp && tp->rx_opt.rcv_tsecr &&
-	    flag & FLAG_ACKED) {
-		u32 delta = tcp_time_stamp(tp) - tp->rx_opt.rcv_tsecr;
-
-		if (likely(delta < INT_MAX / (USEC_PER_SEC / TCP_TS_HZ))) {
-			if (!delta)
-				delta = 1;
-			seq_rtt_us = delta * (USEC_PER_SEC / TCP_TS_HZ);
-			ca_rtt_us = seq_rtt_us;
-		}
-	}
+	if (seq_rtt_us < 0 && tp->rx_opt.saw_tstamp &&
+	    tp->rx_opt.rcv_tsecr && flag & FLAG_ACKED)
+		seq_rtt_us = ca_rtt_us = tcp_rtt_tsopt_us(tp, 1);
 	rs->rtt_us = ca_rtt_us; /* RTT of last (S)ACKed packet (or -1) */
 	if (seq_rtt_us < 0)
 		return false;
@@ -7034,6 +7038,7 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	req->syncookie = want_cookie;
 	tcp_rsk(req)->af_specific = af_ops;
 	tcp_rsk(req)->ts_off = 0;
+	tcp_rsk(req)->req_usec_ts = false;
 #if IS_ENABLED(CONFIG_MPTCP)
 	tcp_rsk(req)->is_mptcp = 0;
 #endif
@@ -7061,8 +7066,10 @@ int tcp_conn_request(struct request_sock_ops *rsk_ops,
 	if (!dst)
 		goto drop_and_free;
 
-	if (tmp_opt.tstamp_ok)
+	if (tmp_opt.tstamp_ok) {
+		tcp_rsk(req)->req_usec_ts = dst_tcp_usec_ts(dst);
 		tcp_rsk(req)->ts_off = af_ops->init_ts_off(net, skb);
+	}
 
 	if (!want_cookie && !isn) {
 		int max_syn_backlog = READ_ONCE(net->ipv4.sysctl_max_syn_backlog);

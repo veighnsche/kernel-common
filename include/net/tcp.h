@@ -840,6 +840,40 @@ static inline u64 tcp_skb_timestamp_us(const struct sk_buff *skb)
 	return div_u64(skb->skb_mstamp_ns, NSEC_PER_USEC);
 }
 
+/* NEW: Clock function that returns ms or us based on flag */
+static inline u32 tcp_clock_ts(bool usec_ts)
+{
+	return usec_ts ? tcp_clock_us() : tcp_time_stamp_raw();
+}
+
+/* NEW: Get timestamp from tcp_sock (replaces tcp_time_stamp) */
+static inline u32 tcp_time_stamp_ts(const struct tcp_sock *tp)
+{
+	if (tp->tcp_usec_ts)
+		return tp->tcp_mstamp;
+	return tcp_time_stamp(tp);  // 6.1 uses tcp_time_stamp(), not tcp_time_stamp_ms()
+}
+
+/* NEW: Get timestamp from skb */
+static inline u32 tcp_skb_timestamp_ts(bool usec_ts, const struct sk_buff *skb)
+{
+	if (usec_ts)
+		return tcp_skb_timestamp_us(skb);
+	return div_u64(skb->skb_mstamp_ns, NSEC_PER_MSEC);
+}
+
+/* NEW: Get timestamp for TIME_WAIT sockets */
+static inline u32 tcp_tw_tsval(const struct tcp_timewait_sock *tcptw)
+{
+	return tcp_clock_ts(tcptw->tw_sk.tw_usec_ts) + tcptw->tw_ts_offset;
+}
+
+/* NEW: Get timestamp for request sockets */
+static inline u32 tcp_rsk_tsval(const struct tcp_request_sock *treq)
+{
+	return tcp_clock_ts(treq->req_usec_ts) + treq->ts_off;
+}
+
 
 #define tcp_flag_byte(th) (((u_int8_t *)th)[13])
 

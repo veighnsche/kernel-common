@@ -292,6 +292,9 @@ static int tcp_v6_connect(struct sock *sk, struct sockaddr *uaddr,
 
 	tcp_death_row = &sock_net(sk)->ipv4.tcp_death_row;
 
+	// Set usec_ts from route
+	tp->tcp_usec_ts = dst_tcp_usec_ts(dst);
+
 	if (!saddr) {
 		saddr = &fl6.saddr;
 

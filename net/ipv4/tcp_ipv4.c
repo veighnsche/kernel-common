@@ -260,6 +260,9 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 
 	tcp_death_row = &sock_net(sk)->ipv4.tcp_death_row;
 
+	// Set usec_ts from route
+	tp->tcp_usec_ts = dst_tcp_usec_ts(&rt->dst);
+
 	if (!inet->inet_saddr) {
 		err = inet_bhash2_update_saddr(sk,  &fl4->saddr, AF_INET);
 		if (err) {
