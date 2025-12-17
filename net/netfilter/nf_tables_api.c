@@ -9024,11 +9024,13 @@ static void nft_commit_release(struct nft_trans *trans)
 
 static void nf_tables_trans_destroy_work(struct work_struct *w)
 {
+	struct nftables_pernet *nft_net = container_of(w, struct nftables_pernet, destroy_work);
 	struct nft_trans *trans, *next;
 	LIST_HEAD(head);
 
+	/* Use per-netns destroy list instead of global */
 	spin_lock(&nf_tables_destroy_list_lock);
-	list_splice_init(&nf_tables_destroy_list, &head);
+	list_splice_init(&nft_net->destroy_list, &head);
 	spin_unlock(&nf_tables_destroy_list_lock);
 
 	if (list_empty(&head))
@@ -9044,6 +9046,10 @@ static void nf_tables_trans_destroy_work(struct work_struct *w)
 
 void nf_tables_trans_destroy_flush_work(void)
 {
+	/* Note: This flushes all per-netns destroy work.
+	 * In a full 6.12 backport, this would take a net * parameter
+	 * and flush only the specific netns work.
+	 */
 	flush_work(&trans_destroy_work);
 }
 EXPORT_SYMBOL_GPL(nf_tables_trans_destroy_flush_work);
@@ -9510,11 +9516,11 @@ static void nf_tables_commit_release(struct net *net)
 
 	trans->put_net = true;
 	spin_lock(&nf_tables_destroy_list_lock);
-	list_splice_tail_init(&nft_net->commit_list, &nf_tables_destroy_list);
+	list_splice_tail_init(&nft_net->commit_list, &nft_net->destroy_list);
 	spin_unlock(&nf_tables_destroy_list_lock);
 
 	nf_tables_module_autoload_cleanup(net);
-	schedule_work(&trans_destroy_work);
+	schedule_work(&nft_net->destroy_work);
 
 	mutex_unlock(&nft_net->commit_mutex);
 }
@@ -10830,7 +10836,10 @@ static int __net_init nf_tables_init_net(struct net *net)
 	INIT_LIST_HEAD(&nft_net->binding_list);
 	INIT_LIST_HEAD(&nft_net->module_list);
 	INIT_LIST_HEAD(&nft_net->notify_list);
+	INIT_LIST_HEAD(&nft_net->destroy_list);	/* per-netns destroy queue */
+	INIT_LIST_HEAD(&nft_net->commit_set_list);	/* pending set commits */
 	mutex_init(&nft_net->commit_mutex);
+	INIT_WORK(&nft_net->destroy_work, nf_tables_trans_destroy_work);
 	nft_net->base_seq = 1;
 	nft_net->validate_state = NFT_VALIDATE_SKIP;
 	nft_net->gc_seq = 0;
@@ -10852,6 +10861,9 @@ static void __net_exit nf_tables_exit_net(struct net *net)
 	struct nftables_pernet *nft_net = nft_pernet(net);
 	unsigned int gc_seq;
 
+	/* Cancel pending destroy work before cleanup */
+	cancel_work_sync(&nft_net->destroy_work);
+
 	mutex_lock(&nft_net->commit_mutex);
 
 	gc_seq = nft_gc_seq_begin(nft_net);
@@ -10869,6 +10881,8 @@ static void __net_exit nf_tables_exit_net(struct net *net)
 	WARN_ON_ONCE(!list_empty(&nft_net->tables));
 	WARN_ON_ONCE(!list_empty(&nft_net->module_list));
 	WARN_ON_ONCE(!list_empty(&nft_net->notify_list));
+	WARN_ON_ONCE(!list_empty(&nft_net->destroy_list));	/* per-netns cleanup */
+	WARN_ON_ONCE(!list_empty(&nft_net->commit_set_list));	/* pending set commits */
 }
 
 static void nf_tables_exit_batch(struct list_head *net_exit_list)

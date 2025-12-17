@@ -1736,12 +1736,15 @@ struct nftables_pernet {
 	struct list_head	binding_list;
 	struct list_head	module_list;
 	struct list_head	notify_list;
+	struct list_head	destroy_list;	/* per-netns destroy queue */
+	struct list_head	commit_set_list;	/* pending set commits */
 	struct mutex		commit_mutex;
 	u64			table_handle;
 	u64			tstamp;
 	unsigned int		base_seq;
 	u8			validate_state;
 	unsigned int		gc_seq;
+	struct work_struct	destroy_work;	/* per-netns workqueue */
 };
 
 extern unsigned int nf_tables_net_id;
