@@ -2316,6 +2316,13 @@
   tcpm_tcpc_reset
   tcpm_unregister_port
   tcpm_vbus_change
+  tcp_cong_avoid_ai
+  tcp_register_congestion_control
+  tcp_reno_cong_avoid
+  tcp_reno_ssthresh
+  tcp_reno_undo_cwnd
+  tcp_slow_start
+  tcp_unregister_congestion_control
   teo_cpu_get_util_threshold
   teo_cpu_set_util_threshold
   thermal_cdev_update
