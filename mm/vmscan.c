@@ -146,6 +146,16 @@ struct scan_control {
 	/* Always discard instead of demoting to lower tier memory */
 	unsigned int no_demotion:1;
 
+	/* TEAM_033: le9uo working set protection flags */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+	/* Anonymous pages below vm.anon_min_ratio */
+	unsigned int anon_below_min:1;
+	/* Clean file pages below vm.clean_low_ratio */
+	unsigned int clean_below_low:1;
+	/* Clean file pages below vm.clean_min_ratio */
+	unsigned int clean_below_min:1;
+#endif
+
 	/* Allocation order */
 	s8 order;
 
@@ -197,6 +207,14 @@ struct scan_control {
  * From 0 .. 200.  Higher means more swappy.
  */
 int vm_swappiness = 60;
+
+/* TEAM_033: le9uo working set protection sysctl variables */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+unsigned int sysctl_workingset_protection __read_mostly;
+unsigned int sysctl_anon_min_ratio __read_mostly = CONFIG_ANON_MIN_RATIO_DEFAULT;
+unsigned int sysctl_clean_min_ratio __read_mostly = CONFIG_CLEAN_MIN_RATIO_DEFAULT;
+unsigned int sysctl_clean_low_ratio __read_mostly = CONFIG_CLEAN_LOW_RATIO_DEFAULT;
+#endif
 
 static void set_task_reclaim_state(struct task_struct *task,
 				   struct reclaim_state *rs)
@@ -3008,6 +3026,59 @@ static void prepare_scan_count(pg_data_t *pgdat, struct scan_control *sc)
 	}
 }
 
+/* TEAM_033: le9uo working set protection */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+static void prepare_workingset_protection(struct pglist_data *pgdat,
+					 struct scan_control *sc)
+{
+	unsigned long anon, clean, dirty;
+	unsigned long totalram = pgdat->node_present_pages;
+	unsigned long anon_min, clean_min, clean_low;
+	bool anon_protected, clean_protected;
+
+	/* Only apply to global reclaim */
+	if (!global_reclaim(sc))
+		return;
+
+	/* Protection disabled */
+	if (!sysctl_workingset_protection)
+		return;
+
+	/* Get current page counts */
+	anon = node_page_state(pgdat, NR_ACTIVE_ANON) +
+	       node_page_state(pgdat, NR_INACTIVE_ANON);
+	clean = node_page_state(pgdat, NR_ACTIVE_FILE) +
+		node_page_state(pgdat, NR_INACTIVE_FILE);
+	dirty = node_page_state(pgdat, NR_WRITEBACK);
+
+	/* Calculate protection thresholds (per-node) */
+	anon_min = totalram * sysctl_anon_min_ratio / 100;
+	clean_min = totalram * sysctl_clean_min_ratio / 100;
+	clean_low = totalram * sysctl_clean_low_ratio / 100;
+
+	/* Check if each type is below protection threshold */
+	anon_protected = anon <= anon_min;
+	clean_protected = (clean - dirty) <= clean_min;
+
+	/* 
+	 * Edge case: If both anon and file are below minimum,
+	 * we're under extreme pressure. Disable protection to avoid
+	 * thrashing and allow normal reclaim behavior.
+	 */
+	if (anon_protected && clean_protected) {
+		sc->anon_below_min = false;
+		sc->clean_below_min = false;
+		sc->clean_below_low = false;
+		return;
+	}
+
+	/* Set protection flags */
+	sc->anon_below_min = anon_protected;
+	sc->clean_below_min = clean_protected;
+	sc->clean_below_low = (clean - dirty) <= clean_low;
+}
+#endif
+
 /*
  * Determine how aggressively the anon and file LRU lists should be
  * scanned.
@@ -3215,6 +3286,21 @@ out:
 			/* Look ma, no brain */
 			BUG();
 		}
+
+		/* TEAM_033: Apply working set protection */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+		if (sysctl_workingset_protection) {
+			/* Don't scan anon if below minimum */
+			if (!file && sc->anon_below_min)
+				scan = 0;
+			/* Don't scan file if below minimum */
+			if (file && sc->clean_below_min)
+				scan = 0;
+			/* Force scan anon if file is below soft limit */
+			if (!file && sc->clean_below_low && scan_balance == SCAN_FRACT)
+				scan = lruvec_size >> sc->priority;
+		}
+#endif
 
 		nr[lru] = scan;
 	}
@@ -5117,11 +5203,32 @@ static int get_tier_idx(struct lruvec *lruvec, int type)
 	return tier - 1;
 }
 
-static int get_type_to_scan(struct lruvec *lruvec, int swappiness, int *tier_idx)
+static int get_type_to_scan(struct lruvec *lruvec, struct scan_control *sc, int swappiness, int *tier_idx)
 {
 	int type, tier;
 	struct ctrl_pos sp, pv;
 	int gain[ANON_AND_FILE] = { swappiness, 200 - swappiness };
+
+	/* TEAM_033: Apply working set protection to MGLRU */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+	if (sysctl_workingset_protection) {
+		/* Don't scan anon if below minimum */
+		if (sc->anon_below_min) {
+			*tier_idx = get_tier_idx(lruvec, LRU_GEN_FILE);
+			return LRU_GEN_FILE;
+		}
+		/* Don't scan file if below minimum */
+		if (sc->clean_below_min) {
+			*tier_idx = get_tier_idx(lruvec, LRU_GEN_ANON);
+			return LRU_GEN_ANON;
+		}
+		/* Force anon scan if file is below soft limit */
+		if (sc->clean_below_low) {
+			*tier_idx = get_tier_idx(lruvec, LRU_GEN_ANON);
+			return LRU_GEN_ANON;
+		}
+	}
+#endif
 
 	/*
 	 * Compare the first tier of anon with that of file to determine which
@@ -5168,7 +5275,22 @@ static int isolate_folios(struct lruvec *lruvec, struct scan_control *sc, int sw
 	else if (swappiness == 200)
 		type = LRU_GEN_ANON;
 	else
-		type = get_type_to_scan(lruvec, swappiness, &tier);
+		type = get_type_to_scan(lruvec, sc, swappiness, &tier);
+
+	/* TEAM_033: Apply working set protection to hardcoded swappiness cases */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+	if (sysctl_workingset_protection && tier == -1) {
+		/* Don't scan anon if below minimum */
+		if (type == LRU_GEN_ANON && sc->anon_below_min)
+			type = LRU_GEN_FILE;
+		/* Don't scan file if below minimum */
+		else if (type == LRU_GEN_FILE && sc->clean_below_min)
+			type = LRU_GEN_ANON;
+		/* Force anon scan if file is below soft limit */
+		else if (type == LRU_GEN_FILE && sc->clean_below_low)
+			type = LRU_GEN_ANON;
+	}
+#endif
 
 	for (i = !swappiness; i < ANON_AND_FILE; i++) {
 		if (tier < 0)
@@ -5646,6 +5768,11 @@ static void lru_gen_shrink_node(struct pglist_data *pgdat, struct scan_control *
 	set_mm_walk(pgdat, sc->proactive);
 
 	set_initial_priority(pgdat, sc);
+
+	/* TEAM_033: Calculate working set protection */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+	prepare_workingset_protection(pgdat, sc);
+#endif
 
 	if (current_is_kswapd())
 		sc->nr_reclaimed = 0;
@@ -6315,6 +6442,56 @@ void lru_gen_exit_memcg(struct mem_cgroup *memcg)
 }
 
 #endif /* CONFIG_MEMCG */
+
+/* TEAM_033: le9uo working set protection sysctl table */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+static struct ctl_table vm_workingset_protection_table[] = {
+	{
+		.procname	= "workingset_protection",
+		.data		= &sysctl_workingset_protection,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE,
+	},
+	{
+		.procname	= "anon_min_ratio",
+		.data		= &sysctl_anon_min_ratio,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE_HUNDRED,
+	},
+	{
+		.procname	= "clean_min_ratio",
+		.data		= &sysctl_clean_min_ratio,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE_HUNDRED,
+	},
+	{
+		.procname	= "clean_low_ratio",
+		.data		= &sysctl_clean_low_ratio,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= SYSCTL_ZERO,
+		.extra2		= SYSCTL_ONE_HUNDRED,
+	},
+	{ }
+};
+
+static int __init init_workingset_protection_sysctl(void)
+{
+	register_sysctl("vm", vm_workingset_protection_table);
+	return 0;
+}
+late_initcall(init_workingset_protection_sysctl);
+#endif /* CONFIG_WORKING_SET_PROTECTION */
 
 static int __init init_lru_gen(void)
 {

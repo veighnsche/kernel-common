@@ -1208,6 +1208,53 @@ config LRU_GEN_STATS
 	  This option has a per-memcg and per-node memory overhead.
 # }
 
+# TEAM_033: le9uo working set protection {
+config WORKING_SET_PROTECTION
+	bool "Working set protection (le9uo)"
+	depends on MMU
+	default n
+	help
+	  Protect a portion of anonymous and clean file pages from reclaim
+	  under memory pressure. This prevents thrashing and improves OOM
+	  response time by ensuring a minimum working set remains resident.
+
+	  When enabled via vm.workingset_protection=1, the kernel will
+	  protect up to vm.anon_min_ratio percent of RAM as anonymous pages
+	  and vm.clean_min_ratio percent as clean file cache.
+
+	  Based on le9uo by firelzrd (https://github.com/firelzrd/le9uo).
+
+	  If unsure, say N.
+
+config ANON_MIN_RATIO_DEFAULT
+	int "Default vm.anon_min_ratio"
+	depends on WORKING_SET_PROTECTION
+	range 0 100
+	default 20
+	help
+	  Default percentage of RAM to protect as anonymous pages.
+	  Can be changed at runtime via /proc/sys/vm/anon_min_ratio.
+
+config CLEAN_MIN_RATIO_DEFAULT
+	int "Default vm.clean_min_ratio"
+	depends on WORKING_SET_PROTECTION
+	range 0 100
+	default 20
+	help
+	  Default percentage of RAM to protect as clean file cache (hard limit).
+	  Can be changed at runtime via /proc/sys/vm/clean_min_ratio.
+
+config CLEAN_LOW_RATIO_DEFAULT
+	int "Default vm.clean_low_ratio"
+	depends on WORKING_SET_PROTECTION
+	range 0 100
+	default 0
+	help
+	  Default percentage of RAM for soft clean file cache protection.
+	  Soft protection yields under OOM pressure.
+	  Can be changed at runtime via /proc/sys/vm/clean_low_ratio.
+# }
+
 config ARCH_SUPPORTS_PER_VMA_LOCK
        def_bool n
 

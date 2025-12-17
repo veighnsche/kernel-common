@@ -217,6 +217,14 @@ extern int sysctl_overcommit_memory;
 extern int sysctl_overcommit_ratio;
 extern unsigned long sysctl_overcommit_kbytes;
 
+/* TEAM_033: le9uo working set protection sysctls */
+#ifdef CONFIG_WORKING_SET_PROTECTION
+extern unsigned int sysctl_workingset_protection;
+extern unsigned int sysctl_anon_min_ratio;
+extern unsigned int sysctl_clean_min_ratio;
+extern unsigned int sysctl_clean_low_ratio;
+#endif
+
 int overcommit_ratio_handler(struct ctl_table *, int, void *, size_t *,
 		loff_t *);
 int overcommit_kbytes_handler(struct ctl_table *, int, void *, size_t *,
