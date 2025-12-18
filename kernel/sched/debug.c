@@ -966,6 +966,8 @@ void proc_sched_show_task(struct task_struct *p, struct pid_namespace *ns,
 	PN(se.exec_start);
 	PN(se.vruntime);
 	PN(se.sum_exec_runtime);
+	/* TEAM_037: Add latency_prio debug output */
+	P(latency_prio);
 
 	nr_switches = p->nvcsw + p->nivcsw;
 

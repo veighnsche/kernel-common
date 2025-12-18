@@ -1290,6 +1290,12 @@ int tg_nop(struct task_group *tg, void *data)
 }
 #endif
 
+/* TEAM_037: Set latency offset from latency_prio */
+static void set_latency_offset(struct task_struct *p)
+{
+	p->se.latency_offset = calc_latency_offset(p->latency_prio);
+}
+
 static void set_load_weight(struct task_struct *p, bool update_load)
 {
 	int prio = p->static_prio - MAX_RT_PRIO;
@@ -4680,6 +4686,8 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 	sched_fork_bore(p);
 #endif /* CONFIG_SCHED_BORE */
 	INIT_LIST_HEAD(&p->se.group_node);
+	/* TEAM_037: Initialize latency_node */
+	RB_CLEAR_NODE(&p->se.latency_node);
 
 #ifdef CONFIG_FAIR_GROUP_SCHED
 	p->se.cfs_rq			= NULL;
@@ -4925,6 +4933,10 @@ int sched_fork(unsigned long clone_flags, struct task_struct *p)
 
 		p->prio = p->normal_prio = p->static_prio;
 		set_load_weight(p, false);
+
+		/* TEAM_037: Reset latency_prio on fork if requested */
+		p->latency_prio = NICE_TO_LATENCY(0);
+		set_latency_offset(p);
 
 		/*
 		 * We don't need the reset flag anymore after the fork. It has
@@ -7732,6 +7744,16 @@ static void __setscheduler_params(struct task_struct *p,
 	set_load_weight(p, true);
 }
 
+/* TEAM_037: Set latency nice from sched_attr */
+static void __setscheduler_latency(struct task_struct *p,
+		const struct sched_attr *attr)
+{
+	if (attr->sched_flags & SCHED_FLAG_LATENCY_NICE) {
+		p->latency_prio = NICE_TO_LATENCY(attr->sched_latency_nice);
+		set_latency_offset(p);
+	}
+}
+
 /*
  * Check the target process has a UID that matches the current process's:
  */
@@ -7879,6 +7901,14 @@ recheck:
 			return retval;
 	}
 
+	/* TEAM_037: Validate latency_nice */
+	if (attr->sched_flags & SCHED_FLAG_LATENCY_NICE) {
+		if (attr->sched_latency_nice > MAX_LATENCY_NICE)
+			return -EINVAL;
+		if (attr->sched_latency_nice < MIN_LATENCY_NICE)
+			return -EINVAL;
+	}
+
 	/*
 	 * SCHED_DEADLINE bandwidth accounting relies on stable cpusets
 	 * information.
@@ -7918,6 +7948,10 @@ recheck:
 		if (dl_policy(policy) && dl_param_changed(p, attr))
 			goto change;
 		if (attr->sched_flags & SCHED_FLAG_UTIL_CLAMP)
+			goto change;
+		/* TEAM_037: Check if latency_nice changed */
+		if (attr->sched_flags & SCHED_FLAG_LATENCY_NICE &&
+		    attr->sched_latency_nice != LATENCY_TO_NICE(p->latency_prio))
 			goto change;
 
 		p->sched_reset_on_fork = reset_on_fork;
@@ -8008,6 +8042,8 @@ change:
 		__setscheduler_prio(p, newprio);
 		trace_android_rvh_setscheduler(p);
 	}
+	/* TEAM_037: Apply latency_nice setting */
+	__setscheduler_latency(p, attr);
 	__setscheduler_uclamp(p, attr);
 
 	if (queued) {
@@ -8215,6 +8251,11 @@ static int sched_copy_attr(struct sched_attr __user *uattr, struct sched_attr *a
 
 	if ((attr->sched_flags & SCHED_FLAG_UTIL_CLAMP) &&
 	    size < SCHED_ATTR_SIZE_VER1)
+		return -EINVAL;
+
+	/* TEAM_037: Check size for latency_nice */
+	if ((attr->sched_flags & SCHED_FLAG_LATENCY_NICE) &&
+	    size < SCHED_ATTR_SIZE_VER2)
 		return -EINVAL;
 
 	/*
@@ -8463,6 +8504,9 @@ SYSCALL_DEFINE4(sched_getattr, pid_t, pid, struct sched_attr __user *, uattr,
 	kattr.sched_util_min = p->uclamp_req[UCLAMP_MIN].value;
 	kattr.sched_util_max = p->uclamp_req[UCLAMP_MAX].value;
 #endif
+
+	/* TEAM_037: Return latency_nice */
+	kattr.sched_latency_nice = LATENCY_TO_NICE(p->latency_prio);
 
 	rcu_read_unlock();
 
@@ -11348,6 +11392,26 @@ static int cpu_idle_write_s64(struct cgroup_subsys_state *css,
 {
 	return sched_group_set_idle(css_tg(css), idle);
 }
+
+/* TEAM_037: Latency nice cgroup interface */
+static s64 cpu_latency_nice_read_s64(struct cgroup_subsys_state *css,
+				    struct cftype *cft)
+{
+	return LATENCY_TO_NICE(css_tg(css)->latency_prio);
+}
+
+static int cpu_latency_nice_write_s64(struct cgroup_subsys_state *css,
+				     struct cftype *cft, s64 nice)
+{
+	int prio;
+
+	if (nice < MIN_LATENCY_NICE || nice > MAX_LATENCY_NICE)
+		return -ERANGE;
+
+	prio = NICE_TO_LATENCY(nice);
+
+	return sched_group_set_latency(css_tg(css), prio);
+}
 #endif
 
 static struct cftype cpu_legacy_files[] = {
@@ -11361,6 +11425,12 @@ static struct cftype cpu_legacy_files[] = {
 		.name = "idle",
 		.read_s64 = cpu_idle_read_s64,
 		.write_s64 = cpu_idle_write_s64,
+	},
+	/* TEAM_037: Latency nice cgroup file */
+	{
+		.name = "latency.nice",
+		.read_s64 = cpu_latency_nice_read_s64,
+		.write_s64 = cpu_latency_nice_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH
@@ -11584,6 +11654,13 @@ static struct cftype cpu_files[] = {
 		.flags = CFTYPE_NOT_ON_ROOT,
 		.read_s64 = cpu_idle_read_s64,
 		.write_s64 = cpu_idle_write_s64,
+	},
+	/* TEAM_037: Latency nice cgroup file */
+	{
+		.name = "latency.nice",
+		.flags = CFTYPE_NOT_ON_ROOT,
+		.read_s64 = cpu_latency_nice_read_s64,
+		.write_s64 = cpu_latency_nice_write_s64,
 	},
 #endif
 #ifdef CONFIG_CFS_BANDWIDTH
