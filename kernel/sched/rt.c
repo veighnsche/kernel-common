@@ -257,8 +257,12 @@ int alloc_rt_sched_group(struct task_group *tg, struct task_group *parent)
 	if (!tg->rt_se)
 		goto err;
 
+	// TEAM_001: Initialize with RUNTIME_INF instead of 0 to allow RT tasks
+	// in all cgroups. This fixes bootloops on Android when
+	// CONFIG_RT_GROUP_SCHED is enabled, as Android doesn't explicitly
+	// allocate RT bandwidth to cgroups before moving RT tasks into them.
 	init_rt_bandwidth(&tg->rt_bandwidth,
-			ktime_to_ns(def_rt_bandwidth.rt_period), 0);
+			ktime_to_ns(def_rt_bandwidth.rt_period), RUNTIME_INF);
 
 	for_each_possible_cpu(i) {
 		rt_rq = kzalloc_node(sizeof(struct rt_rq),
